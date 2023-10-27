@@ -1,40 +1,21 @@
 import time
-import base64
-from abc import ABC, abstractmethod
-from threading import Thread
-from typing import TypeVar, Generic, Dict, List, Tuple, Optional, Union
+from typing import Dict, List, Tuple
 
-import cv2
 import numpy as np
-from IPython.display import display, Image
-
-from dt_computer_vision.ground_projection.rendering import draw_grid_image, debug_image
-
-from dt_computer_vision.ground_projection import GroundProjector, GroundPoint
 
 from dt_computer_vision.camera import CameraModel, Pixel, NormalizedImagePoint
+from dt_computer_vision.ground_projection import GroundProjector, GroundPoint
+from dt_computer_vision.ground_projection.rendering import draw_grid_image, debug_image
 from dt_computer_vision.line_detection import ColorRange, Detections, LineDetector
 from dt_computer_vision.line_detection.rendering import draw_segments
-from dt_duckiematrix_protocols.robot import DB21J
 from dt_modeling.electronics.PWM import PWM
 from dt_modeling.kinematics.inverse import InverseKinematics
+from dt_motion_planning.lane_controller import PIDLaneController
 from dt_state_estimation.lane_filter import LaneFilterHistogram
-
 from dt_state_estimation.lane_filter.types import Segment, SegmentColor
 
-from dt_motion_planning.lane_controller import PIDLaneController
-
-from dt_duckiematrix_protocols import Matrix
-
-from turbojpeg import TurboJPEG
-import roslibpy
-
-from .exceptions import ComponentShutdown
-from .ros import ROS
-from .types import CameraParameters, JPEGImage, BGRImage, Color, Queue, DetectedLines, ColorName
-
-InputType = TypeVar("InputType")
-OutputType = TypeVar("OutputType")
+from .base import Component
+from ..types import CameraParameters, BGRImage, Color, Queue, DetectedLines, ColorName
 
 V, Omega = float, float
 D, Phi = float, float
@@ -59,87 +40,13 @@ WHEEL_BASELINE: float = 0.1
 WHEEL_RADIUS: float = 0.0318
 
 __all__ = [
-    "Component",
-    "CameraDriverComponent",
     "ImageCropComponent",
     "LineDetectorComponent",
     "LaneFilterComponent",
     "LaneControllerComponent",
     "InverseKinematicsComponent",
     "PWMComponent",
-    "DuckiematrixMotorDriverComponent",
 ]
-
-
-class Component(Thread, ABC, Generic[InputType, OutputType]):
-
-    def __init__(self):
-        super().__init__()
-        self._is_shutdown: bool = False
-
-    @property
-    def is_shutdown(self) -> bool:
-        return self._is_shutdown
-
-    def stop(self):
-        self._is_shutdown = True
-        # stop all queues
-        for attr_name in set(self.__dict__.keys()) - set(dir(self.__class__)):
-            attr = getattr(self, attr_name)
-            if isinstance(attr, Queue):
-                attr.stop()
-
-    def run(self) -> None:
-        try:
-            self.worker()
-        except ComponentShutdown:
-            return
-        except:
-            raise
-
-    @abstractmethod
-    def worker(self):
-        pass
-
-    def __del__(self):
-        self.stop()
-
-
-class CameraDriverComponent(Component[None, BGRImage]):
-    def __init__(self, vehicle_name: str):
-        # TODO: you might want to expose the throttle to avoid swamping the websocket
-        super(CameraDriverComponent, self).__init__()
-        self._vehicle_name: str = vehicle_name
-        self._ros = ROS.get_connection(self._vehicle_name)
-        self._topic: Optional[roslibpy.Topic] = None
-        # JPEG decoder
-        self._jpeg_decoder = TurboJPEG()
-        # queues
-        self.out_bgr: Queue[BGRImage] = Queue()
-        self._sleep: Queue[None] = Queue()
-
-    def _msg_to_bgr(self, msg) -> BGRImage:
-        raw: bytes = msg['data'].encode('ascii')
-        jpeg: JPEGImage = base64.b64decode(raw)
-        return self._jpeg_decoder.decode(jpeg)
-
-    def worker(self):
-        if not self._ros.is_connected:
-            self._ros.run()
-        # subscribe to camera topic
-        topic_name: str = f"/{self._vehicle_name}/camera_node/image/compressed"
-        self._topic = roslibpy.Topic(self._ros, topic_name, "sensor_msgs/CompressedImage")
-        # jpg -> bgr -> queue
-        self._topic.subscribe(lambda msg: self.out_bgr.put(self._msg_to_bgr(msg)))
-        # wait for the queue to shutdown (this is used to keep the thread alive)
-        self._sleep.get()
-
-    def stop(self):
-        try:
-            self._topic.unsubscribe()
-        except:
-            pass
-        super(CameraDriverComponent, self).stop()
 
 
 class ImageCropComponent(Component[BGRImage, BGRImage]):
@@ -544,65 +451,3 @@ class PWMComponent(Component[Tuple[OmegaLeft, OmegaRight], Tuple[PWMLeft, PWMRig
             wl, wr = self.in_wl_wr.get()
             pwml, pwmr = self._pwm.get_wheels_duty_cycle(wl, wr)
             self.out_pwml_pwmr.put((pwml, pwmr))
-
-
-class DuckiematrixMotorDriverComponent(Component[Tuple[PWMLeft, PWMRight], None]):
-    """
-    Sends wheel commands to a virtual robot that is running in a Duckiematrix instance.
-
-    Args:
-        engine_hostname: str        The hostname of the Duckiematrix engine to connect to.
-        robot_name: str             The name of the robot in the Duckiematrix map.
-
-    """
-
-    def __init__(self, engine_hostname: str = "localhost", robot_name: str = "map_0/vehicle_0"):
-        super(DuckiematrixMotorDriverComponent, self).__init__()
-        self._engine_hostname: str = engine_hostname
-        self._robot_name: str = robot_name
-        # queues
-        self.in_pwml_pwmr: Queue[Tuple[PWMLeft, PWMRight]] = Queue()
-        self.out_command_time: Queue[float] = Queue()
-
-    def worker(self):
-        # create connection to the matrix engine
-        matrix = Matrix(self._engine_hostname, auto_commit=True)
-        # create connection to the vehicle
-        robot: DB21J = matrix.robots.DB21J(self._robot_name)
-        while not self.is_shutdown:
-            wl, wr = self.in_pwml_pwmr.get()
-            with robot.session():
-                robot.drive(wl, wr)
-            self.out_command_time.put(time.time())
-
-
-class ImageRendererComponent(Component[Union[JPEGImage, BGRImage], None]):
-
-    def __init__(self, disp: Optional[display] = None):
-        super(ImageRendererComponent, self).__init__()
-        self._display: display = disp or display(Image(data=b""), display_id=True)
-        # queues
-        self.in_image: Queue[Union[JPEGImage, BGRImage]] = Queue()
-
-    def join(self, **kwargs):
-        try:
-            super(ImageRendererComponent, self).join(**kwargs)
-        except KeyboardInterrupt:
-            print("Rendering stopped")
-
-    def worker(self):
-        # consume frames
-        while not self.is_shutdown:
-            frame: Union[JPEGImage, BGRImage] = self.in_image.get()
-            jpeg: JPEGImage
-            # JPEG
-            if isinstance(frame, JPEGImage):
-                jpeg = frame
-            # BGR
-            else:
-                # bgr -> jpeg
-                _, frame = cv2.imencode('.jpeg', frame)
-                jpeg = frame.tobytes()
-
-            # render frame
-            self._display.update(Image(data=jpeg))
