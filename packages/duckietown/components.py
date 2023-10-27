@@ -1,9 +1,13 @@
 import time
+import base64
 from abc import ABC, abstractmethod
 from threading import Thread
-from typing import TypeVar, Generic, Dict, List, Tuple
+from typing import TypeVar, Generic, Dict, List, Tuple, Optional, Union
 
+import cv2
 import numpy as np
+from IPython.display import display, Image
+
 from dt_computer_vision.ground_projection.rendering import draw_grid_image, debug_image
 
 from dt_computer_vision.ground_projection import GroundProjector, GroundPoint
@@ -18,12 +22,15 @@ from dt_state_estimation.lane_filter import LaneFilterHistogram
 
 from dt_state_estimation.lane_filter.types import Segment, SegmentColor
 
+from dt_motion_planning.lane_controller import PIDLaneController
+
 from dt_duckiematrix_protocols import Matrix
 
 from turbojpeg import TurboJPEG
+import roslibpy
 
-from dt_motion_planning.lane_controller import PIDLaneController
 from .exceptions import ComponentShutdown
+from .ros import ROS
 from .types import CameraParameters, JPEGImage, BGRImage, Color, Queue, DetectedLines, ColorName
 
 InputType = TypeVar("InputType")
@@ -53,7 +60,8 @@ WHEEL_RADIUS: float = 0.0318
 
 __all__ = [
     "Component",
-    "CameraComponent",
+    "CameraDriverComponent",
+    "ImageCropComponent",
     "LineDetectorComponent",
     "LaneFilterComponent",
     "LaneControllerComponent",
@@ -67,7 +75,7 @@ class Component(Thread, ABC, Generic[InputType, OutputType]):
 
     def __init__(self):
         super().__init__()
-        self._is_shutdown: bool = True
+        self._is_shutdown: bool = False
 
     @property
     def is_shutdown(self) -> bool:
@@ -76,7 +84,7 @@ class Component(Thread, ABC, Generic[InputType, OutputType]):
     def stop(self):
         self._is_shutdown = True
         # stop all queues
-        for attr_name in set(dir(self.__class__)) - set(dir(self)):
+        for attr_name in set(self.__dict__.keys()) - set(dir(self.__class__)):
             attr = getattr(self, attr_name)
             if isinstance(attr, Queue):
                 attr.stop()
@@ -97,10 +105,47 @@ class Component(Thread, ABC, Generic[InputType, OutputType]):
         self.stop()
 
 
-class CameraComponent(Component[bytes, BGRImage]):
+class CameraDriverComponent(Component[None, BGRImage]):
+    def __init__(self, vehicle_name: str):
+        # TODO: you might want to expose the throttle to avoid swamping the websocket
+        super(CameraDriverComponent, self).__init__()
+        self._vehicle_name: str = vehicle_name
+        self._ros = ROS.get_connection(self._vehicle_name)
+        self._topic: Optional[roslibpy.Topic] = None
+        # JPEG decoder
+        self._jpeg_decoder = TurboJPEG()
+        # queues
+        self.out_bgr: Queue[BGRImage] = Queue()
+        self._sleep: Queue[None] = Queue()
+
+    def _msg_to_bgr(self, msg) -> BGRImage:
+        raw: bytes = msg['data'].encode('ascii')
+        jpeg: JPEGImage = base64.b64decode(raw)
+        return self._jpeg_decoder.decode(jpeg)
+
+    def worker(self):
+        if not self._ros.is_connected:
+            self._ros.run()
+        # subscribe to camera topic
+        topic_name: str = f"/{self._vehicle_name}/camera_node/image/compressed"
+        self._topic = roslibpy.Topic(self._ros, topic_name, "sensor_msgs/CompressedImage")
+        # jpg -> bgr -> queue
+        self._topic.subscribe(lambda msg: self.out_bgr.put(self._msg_to_bgr(msg)))
+        # wait for the queue to shutdown (this is used to keep the thread alive)
+        self._sleep.get()
+
+    def stop(self):
+        try:
+            self._topic.unsubscribe()
+        except:
+            pass
+        super(CameraDriverComponent, self).stop()
+
+
+class ImageCropComponent(Component[BGRImage, BGRImage]):
     """
-    Represents a virtual camera that takes in a JPEG file, the camera parameters of the original camera
-    (i.e., the camera that produced the JPEG), and the number of pixels to crop from the top. It then outputs
+    Represents a virtual camera that takes in a frame, the camera parameters of the original camera
+    (i.e., the camera that produced the frame), and the number of pixels to crop from the top. It then outputs
     the corresponding cropped image as a BGR numpy array together with the camera parameters for the
     "cropped" camera.
 
@@ -170,11 +215,9 @@ class CameraComponent(Component[bytes, BGRImage]):
     }
 
     def __init__(self, parameters: CameraParameters, crop_top: int = 240):
-        super(CameraComponent, self).__init__()
+        super(ImageCropComponent, self).__init__()
         self.parameters: CameraParameters = parameters
         self._crop_top: int = crop_top
-        # JPEG decoder
-        self._jpeg_decoder = TurboJPEG()
         # compute image crop
         self._image_crop = [0, crop_top, self.parameters["width"], self.parameters["height"] - crop_top]
         # compute new cropped camera parameters
@@ -188,13 +231,11 @@ class CameraComponent(Component[bytes, BGRImage]):
         _P[0][2] = _P[0][2] - x
         _P[1][2] = _P[1][2] - y
         # queues
-        self.in_jpeg: Queue[JPEGImage] = Queue()
+        self.in_bgr: Queue[BGRImage] = Queue()
         self.out_bgr: Queue[BGRImage] = Queue()
 
     def worker(self):
-        jpg: bytes = self.in_jpeg.get()
-        # jpg -> bgr
-        bgr = self._jpeg_decoder.decode(jpg)
+        bgr: BGRImage = self.in_bgr.get()
         # crop frame
         x, y, w, h = self._image_crop
         bgr = bgr[y : y + h, x : x + w, :]
@@ -343,7 +384,7 @@ class LaneFilterComponent(Component[Dict[ColorName, DetectedLines], Tuple[D, Phi
         self._grid: BGRImage = draw_grid_image((400, 400))
         # queues
         self.in_lines: Queue[Dict[ColorName, DetectedLines]] = Queue()
-        self.in_command: Queue[Tuple[V, Omega]] = Queue(repeat_last=True)
+        self.in_v_omega: Queue[Tuple[V, Omega]] = Queue(repeat_last=True)
         self.in_command_time: Queue[float] = Queue(repeat_last=True, initial=0.0)
         self.out_d_phi: Queue[Tuple[D, Phi]] = Queue()
         self.out_segments_image: Queue[BGRImage] = Queue()
@@ -392,7 +433,7 @@ class LaneFilterComponent(Component[Dict[ColorName, DetectedLines], Tuple[D, Phi
             if last_command_time > self._last_prediction_time:
                 now: float = time.time()
                 delta_t: float = now - self._last_prediction_time
-                last_command: Tuple[V, Omega] = self.in_command.get()
+                last_command: Tuple[V, Omega] = self.in_v_omega.get()
                 self._filter.predict(delta_t, *last_command)
                 self._last_prediction_time = now
 
@@ -533,3 +574,35 @@ class DuckiematrixMotorDriverComponent(Component[Tuple[PWMLeft, PWMRight], None]
             with robot.session():
                 robot.drive(wl, wr)
             self.out_command_time.put(time.time())
+
+
+class ImageRendererComponent(Component[Union[JPEGImage, BGRImage], None]):
+
+    def __init__(self, disp: Optional[display] = None):
+        super(ImageRendererComponent, self).__init__()
+        self._display: display = disp or display(Image(data=b""), display_id=True)
+        # queues
+        self.in_image: Queue[Union[JPEGImage, BGRImage]] = Queue()
+
+    def join(self, **kwargs):
+        try:
+            super(ImageRendererComponent, self).join(**kwargs)
+        except KeyboardInterrupt:
+            print("Rendering stopped")
+
+    def worker(self):
+        # consume frames
+        while not self.is_shutdown:
+            frame: Union[JPEGImage, BGRImage] = self.in_image.get()
+            jpeg: JPEGImage
+            # JPEG
+            if isinstance(frame, JPEGImage):
+                jpeg = frame
+            # BGR
+            else:
+                # bgr -> jpeg
+                _, frame = cv2.imencode('.jpeg', frame)
+                jpeg = frame.tobytes()
+
+            # render frame
+            self._display.update(Image(data=jpeg))

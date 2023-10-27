@@ -49,6 +49,7 @@ class Queue(Generic[T], queue.Queue):
         if item is SHUTDOWN_DUMMY:
             raise ComponentShutdown()
         # ---
+        self._last = item
         return item
 
     # noinspection PyMethodOverriding
@@ -62,6 +63,9 @@ class Queue(Generic[T], queue.Queue):
 
     def forward_to(self, q: 'Queue'):
         self._links.add(q)
+
+    def wants(self, q: 'Queue'):
+        q._links.add(self)
 
     def stop(self):
         self._is_shutdown = True
