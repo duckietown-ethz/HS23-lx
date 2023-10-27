@@ -1,0 +1,2 @@
+class ComponentShutdown(Exception):
+    pass
