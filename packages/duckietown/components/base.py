@@ -3,7 +3,7 @@ from threading import Thread
 from typing import TypeVar, Generic
 
 from ..exceptions import ComponentShutdown
-from ..types import Queue
+from ..types import IQueue
 
 InputType = TypeVar("InputType")
 OutputType = TypeVar("OutputType")
@@ -30,7 +30,7 @@ class Component(Thread, ABC, Generic[InputType, OutputType]):
         # stop all queues
         for attr_name in set(self.__dict__.keys()) - set(dir(self.__class__)):
             attr = getattr(self, attr_name)
-            if isinstance(attr, Queue):
+            if isinstance(attr, IQueue):
                 attr.stop()
 
     def run(self) -> None:

@@ -1,5 +1,6 @@
 import queue
-from typing import Tuple, Dict, Union, TypeVar, Generic, Set, Any
+from abc import abstractmethod, ABC
+from typing import Tuple, Dict, Union, TypeVar, Generic, Set, Any, Callable
 
 import numpy as np
 
@@ -17,18 +18,42 @@ T = TypeVar("T")
 SHUTDOWN_DUMMY = object()
 
 
-class Queue(Generic[T], queue.Queue):
+class IQueue(Generic[T], ABC):
+
+    def __init__(self):
+        self._links: Set[IQueue] = {self}
+        self._is_shutdown: bool = False
+
+    @abstractmethod
+    def get(self) -> T:
+        pass
+
+    @abstractmethod
+    def put(self, value: T):
+        pass
+
+    def forward_to(self, q: 'IQueue'):
+        self._links.add(q)
+
+    def wants(self, q: 'IQueue'):
+        q._links.add(self)
+
+    def stop(self):
+        self._is_shutdown = True
+        self.put(SHUTDOWN_DUMMY)
+
+
+class Queue(IQueue[T]):
     """
     Same as queue.Queue but with at most 1 item and a put() that replaces the old element in the queue if any.
     """
 
     def __init__(self, repeat_last: bool = False, initial: T = None):
-        super(Queue, self).__init__(maxsize=1)
+        super(Queue, self).__init__()
         # internal state
         self._repeat_last: bool = repeat_last
         self._last: T = None
-        self._links: Set[Queue] = {self}
-        self._is_shutdown: bool = False
+        self._proxied: queue.Queue = queue.Queue(maxsize=1)
         # initial value
         if initial is not None:
             self.put(initial)
@@ -40,11 +65,11 @@ class Queue(Generic[T], queue.Queue):
         # get item
         if self._repeat_last and self._last is not None:
             try:
-                item: Any = super(Queue, self).get(block=False)
+                item: Any = self._proxied.get(block=False)
             except queue.Empty:
                 item: Any = self._last
         else:
-            item: Any = super(Queue, self).get()
+            item: Any = self._proxied.get()
         # we pass the dummy to the queue to unlock them and make them exit
         if item is SHUTDOWN_DUMMY:
             raise ComponentShutdown()
@@ -54,19 +79,44 @@ class Queue(Generic[T], queue.Queue):
 
     # noinspection PyMethodOverriding
     def put(self, value: T):
+        # iterate over the linked queues
         for q in self._links:
-            try:
-                super(Queue, q).get(block=False)
-            except queue.Empty:
-                pass
-            super(Queue, q).put(value)
+            if q is self:
+                # clear old and add new
+                try:
+                    self._proxied.get(block=False)
+                except queue.Empty:
+                    pass
+                self._proxied.put(value)
+            else:
+                # we do not want to shut down other queues, just us
+                if value is SHUTDOWN_DUMMY:
+                    continue
+                # delegate the other queue to figure out what to do
+                q.put(value)
 
-    def forward_to(self, q: 'Queue'):
-        self._links.add(q)
 
-    def wants(self, q: 'Queue'):
-        q._links.add(self)
+class CallbackQueue(IQueue[T]):
 
-    def stop(self):
-        self._is_shutdown = True
-        self.put(SHUTDOWN_DUMMY)
+    def __init__(self, callback: Callable[[T], None], connect_to: IQueue = None):
+        super(CallbackQueue, self).__init__()
+        self._callback: Callable[[T], None] = callback
+        if connect_to is not None:
+            self.wants(connect_to)
+
+    def get(self) -> T:
+        raise NotImplementedError(
+            "You cannot call the method 'get()' on an instance of CallbackQueue. "
+            "Messages are delivered to the given callback, use the class Queue instead."
+        )
+
+    def put(self, value: T):
+        # we do not want to send the dummy through the callback
+        if value is SHUTDOWN_DUMMY:
+            return
+        # iterate over the linked queues
+        for q in self._links:
+            if q is self:
+                self._callback(value)
+            else:
+                q.put(value)

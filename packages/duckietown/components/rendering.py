@@ -72,7 +72,7 @@ class MarkdownRendererComponent(GenericRenderingComponent[str]):
 
     def __init__(self, formatter: Callable[[Any], str] = str, disp: Optional[display] = None):
         super(MarkdownRendererComponent, self).__init__(Markdown(data=""), disp)
-        self._formatter: Callable[[Any], str] = formatter
+        self.formatter: Callable[[Any], str] = formatter
         # queues
         self.in_data: Queue[Any] = Queue()
 
@@ -81,6 +81,6 @@ class MarkdownRendererComponent(GenericRenderingComponent[str]):
         while not self.is_shutdown:
             data: Any = self.in_data.get()
             # format input data
-            markdown: str = self._formatter(data)
+            markdown: str = self.formatter(data)
             # render frame
             self._display.update(Markdown(data=markdown))

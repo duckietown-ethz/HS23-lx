@@ -7,13 +7,15 @@ from turbojpeg import TurboJPEG
 
 from .base import Component, OutputType
 from ..ros import ROS
-from ..types import JPEGImage, BGRImage, Queue
+from ..types import JPEGImage, BGRImage, IQueue, Queue
 
 Range = float
+Ticks = int
 
 __all__ = [
     "CameraDriverComponent",
-    "TimeOfFlightDriverComponent"
+    "TimeOfFlightDriverComponent",
+    "WheelEncoderDriverComponent"
 ]
 
 
@@ -26,8 +28,8 @@ class GenericROSSubscriberComponent(Component[None, OutputType]):
         topic_name: str = f"/{self._vehicle_name}/{topic_name.lstrip('/')}"
         self._topic: roslibpy.Topic = roslibpy.Topic(self._ros, topic_name, msg_type)
         # queues
-        self._out_data: Queue[Any] = Queue()
-        self._sleep: Queue[None] = Queue()
+        self._out_data: IQueue[Any] = Queue()
+        self._sleep: IQueue[None] = Queue()
 
     @staticmethod
     @abstractmethod
@@ -60,7 +62,7 @@ class CameraDriverComponent(GenericROSSubscriberComponent[BGRImage]):
         self._jpeg_decoder = TurboJPEG()
 
     @property
-    def out_bgr(self) -> Queue[BGRImage]:
+    def out_bgr(self) -> IQueue[BGRImage]:
         return self._out_data
 
     def _msg_to_data(self, msg) -> BGRImage:
@@ -77,7 +79,7 @@ class TimeOfFlightDriverComponent(GenericROSSubscriberComponent[Range]):
         )
 
     @property
-    def out_range(self) -> Queue[Range]:
+    def out_range(self) -> IQueue[Range]:
         return self._out_data
 
     @staticmethod
@@ -85,3 +87,33 @@ class TimeOfFlightDriverComponent(GenericROSSubscriberComponent[Range]):
         max_range: float = msg["max_range"]
         range: float = msg["range"]
         return None if range >= max_range else range
+
+
+class WheelEncoderDriverComponent(GenericROSSubscriberComponent[Range]):
+
+    def __init__(self, vehicle_name: str, side: str):
+        if side not in ["left", "right"]:
+            raise ValueError(f"Side '{side}' not recognized. Valid choices are ['left', 'right'].")
+        super(WheelEncoderDriverComponent, self).__init__(
+            vehicle_name, f"/{side}_wheel_encoder_node/tick", "duckietown_msgs/WheelEncoderStamped"
+        )
+        self._resolution: Optional[float] = None
+        # queues
+        self.out_rotation: IQueue[float] = Queue()
+
+    @property
+    def out_ticks(self) -> IQueue[Ticks]:
+        return self._out_data
+
+    @property
+    def resolution(self) -> Optional[float]:
+        return self._resolution
+
+    def _msg_to_data(self, msg) -> Optional[Range]:
+        self._resolution = msg["resolution"]
+        ticks: int = msg["data"]
+        rotation: float = ticks / self._resolution
+        self.out_rotation.put(rotation)
+        return ticks
+
+
