@@ -8,7 +8,8 @@ from .exceptions import ComponentShutdown
 
 JPEGImage = bytes
 BGRImage = np.ndarray
-Color = Tuple[int, int, int]
+RGB8Color = BGR8Color = Tuple[int, int, int]
+RGBColor = BGRColor = Tuple[float, float, float]
 ColorName = str
 DetectedLines = Dict[str, list]
 CameraParameters = Dict[str, Union[np.ndarray, int]]

@@ -15,7 +15,7 @@ from dt_state_estimation.lane_filter import LaneFilterHistogram
 from dt_state_estimation.lane_filter.types import Segment, SegmentColor
 
 from .base import Component
-from ..types import CameraParameters, BGRImage, Color, Queue, DetectedLines, ColorName
+from ..types import CameraParameters, BGRImage, RGB8Color, Queue, DetectedLines, ColorName
 
 V, Omega = float, float
 D, Phi = float, float
@@ -27,7 +27,7 @@ DEFAULT_COLOR_RANGES: Dict[str, ColorRange] = {
     "white": ColorRange.fromDict({"low": [0, 0, 150], "high": [180, 100, 255]}),
     "yellow": ColorRange.fromDict({"low": [0, 100, 100], "high": [45, 255, 255]}),
 }
-COLORS: Dict[str, Color] = {
+COLORS: Dict[str, RGB8Color] = {
     "red": (0, 0, 255),
     "yellow": (0, 255, 255),
     "white": (255, 255, 255),
@@ -299,7 +299,7 @@ class LaneFilterComponent(Component[Dict[ColorName, DetectedLines], Tuple[D, Phi
     def worker(self):
         while not self.is_shutdown:
             segments: List[Segment] = []
-            colored_segments: Dict[Color, List[Tuple[GroundPoint, GroundPoint]]] = {}
+            colored_segments: Dict[RGB8Color, List[Tuple[GroundPoint, GroundPoint]]] = {}
             lines: Dict[ColorName, DetectedLines] = self.in_lines.get()
 
             for color, colored_lines in lines.items():
