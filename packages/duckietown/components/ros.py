@@ -1,6 +1,7 @@
 import base64
 import dataclasses
 from abc import abstractmethod
+from threading import Condition
 from typing import Optional, Any, Tuple, List
 
 import roslibpy
@@ -63,6 +64,8 @@ class GenericROSPublisherComponent(Component[InputType, None]):
         self._ros = ROS.get_connection(self._vehicle_name)
         topic_name: str = f"/{self._vehicle_name}/{topic_name.lstrip('/')}"
         self._topic: roslibpy.Topic = roslibpy.Topic(self._ros, topic_name, msg_type)
+        # simulate Thread.join
+        self._join: Condition = Condition()
         # queues
         self._in_data: IQueue[Any] = CallbackQueue(self._publish)
 
@@ -76,7 +79,10 @@ class GenericROSPublisherComponent(Component[InputType, None]):
             self._ros.run()
 
     def join(self, **kwargs) -> None:
-        raise RuntimeError("You cannot join a ROS publisher object.")
+        if self.is_shutdown:
+            return
+        with self._join:
+            self._join.wait()
 
     def worker(self):
         pass
@@ -90,11 +96,16 @@ class GenericROSPublisherComponent(Component[InputType, None]):
         self._topic.publish(roslibpy.Message(msg))
 
     def stop(self):
+        # let the parent class start the cleaning process (important that we do this first)
+        super(GenericROSPublisherComponent, self).stop()
+        # release all Threads that have joined this object
+        with self._join:
+            self._join.notify_all()
+        # unadvertise the topic
         try:
             self._topic.unadvertise()
         except:
             pass
-        super(GenericROSPublisherComponent, self).stop()
 
 
 class CameraDriverComponent(GenericROSSubscriberComponent[BGRImage]):
@@ -173,6 +184,14 @@ class LEDsPattern:
 class LEDsDriverComponent(GenericROSPublisherComponent[LEDsPattern]):
 
     OFF: RGBAColor = (0, 0, 0, 0)
+    IDLE: LEDsPattern = LEDsPattern(
+        # white on the front
+        front_left=(1, 1, 1, 0.1),
+        front_right=(1, 1, 1, 0.1),
+        # red on the back
+        rear_right=(1, 0, 0, 0.2),
+        rear_left=(1, 0, 0, 0.2),
+    )
 
     def __init__(self, vehicle_name: str):
         super(LEDsDriverComponent, self).__init__(
@@ -190,6 +209,10 @@ class LEDsDriverComponent(GenericROSPublisherComponent[LEDsPattern]):
                 dict(zip("rgba", led)) for led in leds
             ]
         }
+
+    def stop(self):
+        super(LEDsDriverComponent, self).stop()
+        self._publish(self.IDLE, force=True)
 
 
 class WheelDriverComponent(GenericROSPublisherComponent[Tuple[PWMSignal, PWMSignal]]):
