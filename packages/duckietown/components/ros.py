@@ -8,7 +8,7 @@ from turbojpeg import TurboJPEG
 
 from .base import Component, OutputType, InputType
 from ..ros import ROS
-from ..types import JPEGImage, BGRImage, IQueue, Queue, CallbackQueue
+from ..types import JPEGImage, BGRImage, IQueue, Queue, CallbackQueue, PWMSignal
 
 Range = float
 Ticks = int
@@ -81,7 +81,9 @@ class GenericROSPublisherComponent(Component[InputType, None]):
     def worker(self):
         pass
 
-    def _publish(self, data: Any):
+    def _publish(self, data: Any, *, force: bool = False):
+        if self.is_shutdown and not force:
+            return
         # format message
         msg: dict = self._data_to_msg(data)
         # publish message
@@ -188,3 +190,27 @@ class LEDsDriverComponent(GenericROSPublisherComponent[LEDsPattern]):
                 dict(zip("rgba", led)) for led in leds
             ]
         }
+
+
+class WheelDriverComponent(GenericROSPublisherComponent[Tuple[PWMSignal, PWMSignal]]):
+
+    OFF: float = 0.0
+
+    def __init__(self, vehicle_name: str):
+        super(WheelDriverComponent, self).__init__(
+            vehicle_name, "/wheels_driver_node/wheels_cmd", "duckietown_msgs/WheelsCmdStamped"
+        )
+
+    @property
+    def in_commands(self) -> IQueue[Tuple[PWMSignal, PWMSignal]]:
+        return self._in_data
+
+    def _data_to_msg(self, data: Tuple[PWMSignal, PWMSignal]) -> dict:
+        return {
+            "vel_left": data[0],
+            "vel_right": data[1],
+        }
+
+    def stop(self):
+        super(WheelDriverComponent, self).stop()
+        self._publish((self.OFF, self.OFF), force=True)

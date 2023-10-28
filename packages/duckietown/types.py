@@ -10,6 +10,7 @@ JPEGImage = bytes
 BGRImage = np.ndarray
 RGB8Color = BGR8Color = Tuple[int, int, int]
 RGBColor = BGRColor = Tuple[float, float, float]
+PWMSignal = float
 ColorName = str
 DetectedLines = Dict[str, list]
 CameraParameters = Dict[str, Union[np.ndarray, int]]
