@@ -12,6 +12,7 @@ from dt_modeling.electronics.PWM import PWM
 from dt_modeling.kinematics.inverse import InverseKinematics
 from dt_motion_planning.lane_controller import PIDLaneController
 from dt_state_estimation.lane_filter import LaneFilterHistogram
+from dt_state_estimation.lane_filter.rendering import plot_d_phi
 from dt_state_estimation.lane_filter.types import Segment, SegmentColor
 
 from .base import Component
@@ -142,12 +143,13 @@ class ImageCropComponent(Component[BGRImage, BGRImage]):
         self.out_bgr: Queue[BGRImage] = Queue()
 
     def worker(self):
-        bgr: BGRImage = self.in_bgr.get()
-        # crop frame
-        x, y, w, h = self._image_crop
-        bgr = bgr[y : y + h, x : x + w, :]
-        # send out
-        self.out_bgr.put(bgr)
+        while not self.is_shutdown:
+            bgr: BGRImage = self.in_bgr.get()
+            # crop frame
+            x, y, w, h = self._image_crop
+            bgr = bgr[y : y + h, x : x + w, :]
+            # send out
+            self.out_bgr.put(bgr)
 
 
 class LineDetectorComponent(Component[BGRImage, Dict[ColorName, DetectedLines]]):
@@ -295,6 +297,7 @@ class LaneFilterComponent(Component[Dict[ColorName, DetectedLines], Tuple[D, Phi
         self.in_command_time: Queue[float] = Queue(repeat_last=True, initial=0.0)
         self.out_d_phi: Queue[Tuple[D, Phi]] = Queue()
         self.out_segments_image: Queue[BGRImage] = Queue()
+        self.out_belief_image: Queue[BGRImage] = Queue()
 
     def worker(self):
         while not self.is_shutdown:
@@ -326,7 +329,7 @@ class LaneFilterComponent(Component[Dict[ColorName, DetectedLines], Tuple[D, Phi
                 colored_segments[COLORS[color]] = grounded_segments
 
             # draw segments
-            if not self.out_segments_image.full():
+            if self.out_segments_image.anybody_interested:
                 image_w_segs: BGRImage = debug_image(
                     colored_segments, (400, 400), background_image=self._grid
                 )
@@ -346,6 +349,13 @@ class LaneFilterComponent(Component[Dict[ColorName, DetectedLines], Tuple[D, Phi
 
             # perform estimation step
             d_hat, phi_hat = self._filter.get_estimate()
+
+            # print belief
+            if self.out_belief_image.anybody_interested:
+                belief: BGRImage = plot_d_phi(d=d_hat, phi=phi_hat)
+                self.out_belief_image.put(belief)
+
+            # publish d, phi
             self.out_d_phi.put((d_hat, phi_hat))
 
 

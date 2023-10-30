@@ -1,24 +1,25 @@
 import base64
-import dataclasses
+import time
 from abc import abstractmethod
 from threading import Condition
 from typing import Optional, Any, Tuple, List
 
 import roslibpy
+
+# noinspection PyUnresolvedReferences
 from turbojpeg import TurboJPEG
 
 from .base import Component, OutputType, InputType
 from ..ros import ROS
-from ..types import JPEGImage, BGRImage, IQueue, Queue, CallbackQueue, PWMSignal
-
-Range = float
-Ticks = int
-RGBAColor = Tuple[float, float, float, float]
+from ..types import JPEGImage, BGRImage, IQueue, Queue, CallbackQueue, PWMSignal, LEDsPattern, RGBAColor, \
+    Range, Ticks
 
 __all__ = [
-    "CameraDriverComponent",
-    "TimeOfFlightDriverComponent",
-    "WheelEncoderDriverComponent"
+    "ROSCameraDriverComponent",
+    "ROSTimeOfFlightDriverComponent",
+    "ROSWheelEncoderDriverComponent",
+    "ROSMotorsDriverComponent",
+    "ROSLEDsDriverComponent"
 ]
 
 
@@ -45,7 +46,7 @@ class GenericROSSubscriberComponent(Component[None, OutputType]):
             self._ros.run()
         # subscribe to topic
         self._topic.subscribe(lambda msg: self._out_data.put(self._msg_to_data(msg)))
-        # wait for the queue to shutdown (this is used to keep the thread alive)
+        # wait for the queue to shut down (this is used to keep the thread alive)
         self._sleep.get()
 
     def stop(self):
@@ -108,10 +109,10 @@ class GenericROSPublisherComponent(Component[InputType, None]):
             pass
 
 
-class CameraDriverComponent(GenericROSSubscriberComponent[BGRImage]):
+class ROSCameraDriverComponent(GenericROSSubscriberComponent[BGRImage]):
     def __init__(self, vehicle_name: str, **kwargs):
         # TODO: you might want to expose the throttle to avoid swamping the websocket
-        super(CameraDriverComponent, self).__init__(
+        super(ROSCameraDriverComponent, self).__init__(
             vehicle_name, "/camera_node/image/compressed", "sensor_msgs/CompressedImage", **kwargs
         )
         # JPEG decoder
@@ -127,10 +128,10 @@ class CameraDriverComponent(GenericROSSubscriberComponent[BGRImage]):
         return self._jpeg_decoder.decode(jpeg)
 
 
-class TimeOfFlightDriverComponent(GenericROSSubscriberComponent[Range]):
+class ROSTimeOfFlightDriverComponent(GenericROSSubscriberComponent[Range]):
 
     def __init__(self, vehicle_name: str, **kwargs):
-        super(TimeOfFlightDriverComponent, self).__init__(
+        super(ROSTimeOfFlightDriverComponent, self).__init__(
             vehicle_name, "/front_center_tof_driver_node/range", "sensor_msgs/Range", **kwargs
         )
 
@@ -145,12 +146,12 @@ class TimeOfFlightDriverComponent(GenericROSSubscriberComponent[Range]):
         return None if range >= max_range else range
 
 
-class WheelEncoderDriverComponent(GenericROSSubscriberComponent[Range]):
+class ROSWheelEncoderDriverComponent(GenericROSSubscriberComponent[Range]):
 
     def __init__(self, vehicle_name: str, side: str, **kwargs):
         if side not in ["left", "right"]:
             raise ValueError(f"Side '{side}' not recognized. Valid choices are ['left', 'right'].")
-        super(WheelEncoderDriverComponent, self).__init__(
+        super(ROSWheelEncoderDriverComponent, self).__init__(
             vehicle_name, f"/{side}_wheel_encoder_node/tick", "duckietown_msgs/WheelEncoderStamped", **kwargs
         )
         self._resolution: Optional[float] = None
@@ -173,15 +174,7 @@ class WheelEncoderDriverComponent(GenericROSSubscriberComponent[Range]):
         return ticks
 
 
-@dataclasses.dataclass
-class LEDsPattern:
-    front_left: RGBAColor
-    front_right: RGBAColor
-    rear_right: RGBAColor
-    rear_left: RGBAColor
-
-
-class LEDsDriverComponent(GenericROSPublisherComponent[LEDsPattern]):
+class ROSLEDsDriverComponent(GenericROSPublisherComponent[LEDsPattern]):
 
     OFF: RGBAColor = (0, 0, 0, 0)
     IDLE: LEDsPattern = LEDsPattern(
@@ -194,7 +187,7 @@ class LEDsDriverComponent(GenericROSPublisherComponent[LEDsPattern]):
     )
 
     def __init__(self, vehicle_name: str):
-        super(LEDsDriverComponent, self).__init__(
+        super(ROSLEDsDriverComponent, self).__init__(
             vehicle_name, "/led_emitter_node/led_pattern", "duckietown_msgs/LEDPattern"
         )
 
@@ -211,21 +204,23 @@ class LEDsDriverComponent(GenericROSPublisherComponent[LEDsPattern]):
         }
 
     def stop(self):
-        super(LEDsDriverComponent, self).stop()
+        super(ROSLEDsDriverComponent, self).stop()
         self._publish(self.IDLE, force=True)
 
 
-class WheelDriverComponent(GenericROSPublisherComponent[Tuple[PWMSignal, PWMSignal]]):
+class ROSMotorsDriverComponent(GenericROSPublisherComponent[Tuple[PWMSignal, PWMSignal]]):
 
     OFF: float = 0.0
 
     def __init__(self, vehicle_name: str):
-        super(WheelDriverComponent, self).__init__(
+        super(ROSMotorsDriverComponent, self).__init__(
             vehicle_name, "/wheels_driver_node/wheels_cmd", "duckietown_msgs/WheelsCmdStamped"
         )
+        # queues
+        self.out_command_time: Queue[float] = Queue()
 
     @property
-    def in_commands(self) -> IQueue[Tuple[PWMSignal, PWMSignal]]:
+    def in_pwml_pwmr(self) -> IQueue[Tuple[PWMSignal, PWMSignal]]:
         return self._in_data
 
     def _data_to_msg(self, data: Tuple[PWMSignal, PWMSignal]) -> dict:
@@ -234,6 +229,10 @@ class WheelDriverComponent(GenericROSPublisherComponent[Tuple[PWMSignal, PWMSign
             "vel_right": data[1],
         }
 
+    def _publish(self, data: Any, *, force: bool = False):
+        super(ROSMotorsDriverComponent, self)._publish(data, force=force)
+        self.out_command_time.put(time.time())
+
     def stop(self):
-        super(WheelDriverComponent, self).stop()
+        super(ROSMotorsDriverComponent, self).stop()
         self._publish((self.OFF, self.OFF), force=True)

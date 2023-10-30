@@ -1,3 +1,4 @@
+import dataclasses
 import queue
 from abc import abstractmethod, ABC
 from typing import Tuple, Dict, Union, TypeVar, Generic, Set, Any, Callable
@@ -10,7 +11,10 @@ JPEGImage = bytes
 BGRImage = np.ndarray
 RGB8Color = BGR8Color = Tuple[int, int, int]
 RGBColor = BGRColor = Tuple[float, float, float]
+RGBAColor = Tuple[float, float, float, float]
 PWMSignal = float
+Range = float
+Ticks = int
 ColorName = str
 DetectedLines = Dict[str, list]
 CameraParameters = Dict[str, Union[np.ndarray, int]]
@@ -33,6 +37,10 @@ class IQueue(Generic[T], ABC):
     @abstractmethod
     def put(self, value: T):
         pass
+
+    @property
+    def anybody_interested(self) -> bool:
+        return len(self._links) > 1
 
     def forward_to(self, q: 'IQueue'):
         self._links.add(q)
@@ -74,6 +82,8 @@ class Queue(IQueue[T]):
             item: Any = self._proxied.get()
         # we pass the dummy to the queue to unlock them and make them exit
         if item is SHUTDOWN_DUMMY:
+            # re-add to the queue to wake others
+            self.put(SHUTDOWN_DUMMY)
             raise ComponentShutdown()
         # ---
         self._last = item
@@ -122,3 +132,11 @@ class CallbackQueue(IQueue[T]):
                 self._callback(value)
             else:
                 q.put(value)
+
+
+@dataclasses.dataclass
+class LEDsPattern:
+    front_left: RGBAColor
+    front_right: RGBAColor
+    rear_right: RGBAColor
+    rear_left: RGBAColor

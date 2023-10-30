@@ -8,11 +8,13 @@ class System:
     def __init__(self, components: Iterable[Component]):
         self._components: Iterable[Component] = components
 
-    def _join(self, ignore_errors: bool = False):
+    def _join(self, ignore_errors: bool = False, talk: bool = False):
         try:
             for component in self._components:
+                if talk:
+                    print(f"[system]: Waiting for component {component.__class__.__name__}@{component.id}...")
                 component.join()
-                print(f"[system]: Component {component.__class__.__name__}@{component.name.lower()} finished")
+                print(f"[system]: Component {component.__class__.__name__}@{component.id} finished")
         except KeyboardInterrupt:
             raise
         except:
@@ -26,7 +28,7 @@ class System:
         try:
             for component in self._components:
                 component.start()
-                print(f"[system]: Component {component.__class__.__name__}@{component.name.lower()} started!")
+                print(f"[system]: Component {component.__class__.__name__}@{component.id} started!")
             print("[system]: System running...")
             self._join()
         except KeyboardInterrupt:
@@ -34,9 +36,9 @@ class System:
 
     def stop(self):
         for component in self._components:
-            print(f"[system]: Stopping component {component.__class__.__name__}@{component.name.lower()}...")
+            print(f"[system]: Stopping component {component.__class__.__name__}@{component.id}...")
             component.stop()
         try:
-            self._join(ignore_errors=True)
+            self._join(ignore_errors=True, talk=True)
         except KeyboardInterrupt:
             print("[system]: Already stopping...")
