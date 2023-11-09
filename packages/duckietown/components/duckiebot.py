@@ -1,6 +1,6 @@
 import os
 from abc import ABC
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 
 from .base import OutputType, InputType, IComponent
 from .duckiematrix import \
@@ -15,7 +15,7 @@ from .ros import \
     ROSWheelEncoderDriverComponent, \
     ROSMotorsDriverComponent, \
     ROSLEDsDriverComponent
-from ..types import BGRImage, IQueue, PWMSignal, LEDsPattern, Range, Ticks, Queue
+from ..types import BGRImage, IQueue, PWMSignal, LEDsPattern, Range, Ticks
 
 __all__ = [
     "CameraDriverComponent",
@@ -32,6 +32,10 @@ class GenericProxiedComponent(IComponent[InputType, OutputType], ABC):
         super(GenericProxiedComponent, self).__init__()
         self._proxy: Optional[IComponent] = None
 
+    @property
+    def is_started(self) -> bool:
+        return self._proxy.is_started
+
     def start(self):
         self._proxy.start()
 
@@ -43,6 +47,12 @@ class GenericProxiedComponent(IComponent[InputType, OutputType], ABC):
 
     def worker(self):
         self._proxy.worker()
+
+    def queues(self) -> Iterator[IQueue]:
+        return self._proxy.queues
+
+    def reset(self):
+        self._proxy.reset()
 
 
 class GenericSubscriberComponent(GenericProxiedComponent[None, OutputType], ABC):

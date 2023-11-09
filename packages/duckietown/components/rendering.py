@@ -1,5 +1,5 @@
 from abc import ABC
-from typing import Optional, Union, Any, Callable, Type
+from typing import Optional, Union, Any, Callable
 
 import cv2
 from IPython.core.display import DisplayObject
@@ -21,9 +21,9 @@ class GenericRenderingComponent(Component[InputType, None], ABC):
         super(GenericRenderingComponent, self).__init__()
         self._display: display = disp or display(initial, display_id=True)
 
-    def join(self, **kwargs):
+    def join(self):
         try:
-            super(GenericRenderingComponent, self).join(**kwargs)
+            super(GenericRenderingComponent, self).join()
         except KeyboardInterrupt:
             pass
 

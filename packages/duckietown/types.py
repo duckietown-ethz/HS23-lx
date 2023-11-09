@@ -38,6 +38,10 @@ class IQueue(Generic[T], ABC):
     def put(self, value: T):
         pass
 
+    @abstractmethod
+    def reset(self):
+        pass
+
     @property
     def anybody_interested(self) -> bool:
         return len(self._links) > 1
@@ -62,11 +66,12 @@ class Queue(IQueue[T]):
         super(Queue, self).__init__()
         # internal state
         self._repeat_last: bool = repeat_last
+        self._initial: T = initial
         self._last: T = None
         self._proxied: queue.Queue = queue.Queue(maxsize=1)
         # initial value
-        if initial is not None:
-            self.put(initial)
+        if self._initial is not None:
+            self.put(self._initial)
 
     # noinspection PyMethodOverriding
     def get(self) -> T:
@@ -107,6 +112,14 @@ class Queue(IQueue[T]):
                 # delegate the other queue to figure out what to do
                 q.put(value)
 
+    def reset(self):
+        self._is_shutdown = False
+        # recreate queue
+        self._proxied: queue.Queue = queue.Queue(maxsize=1)
+        # initial value
+        if self._initial is not None:
+            self.put(self._initial)
+
 
 class CallbackQueue(IQueue[T]):
 
@@ -132,6 +145,9 @@ class CallbackQueue(IQueue[T]):
                 self._callback(value)
             else:
                 q.put(value)
+
+    def reset(self):
+        self._is_shutdown = False
 
 
 @dataclasses.dataclass

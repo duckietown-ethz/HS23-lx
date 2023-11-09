@@ -33,6 +33,7 @@ class GenericDuckiematrixSubscriberComponent(IComponent[None, OutputType]):
         assert "DUCKIEMATRIX_ENGINE_HOST" in os.environ
         self._engine_hostname = os.environ["DUCKIEMATRIX_ENGINE_HOST"]
         # ---
+        self._is_started: bool = False
         self._matrix = Duckiematrix.get_instance(self._engine_hostname)
         self._robot: DB21M = self._matrix.robots.DB21M(self._vehicle_name)
         self._callback: Callable[[Any], None] = lambda msg: self._out_data.put(self._msg_to_data(msg))
@@ -40,6 +41,10 @@ class GenericDuckiematrixSubscriberComponent(IComponent[None, OutputType]):
         self._join: Condition = Condition()
         # queues
         self._out_data: IQueue[Any] = Queue()
+
+    @property
+    def is_started(self) -> bool:
+        return self._is_started
 
     @staticmethod
     @abstractmethod
@@ -52,7 +57,9 @@ class GenericDuckiematrixSubscriberComponent(IComponent[None, OutputType]):
         pass
 
     def start(self):
+        self.reset()
         self._sensor.attach(self._callback)
+        self._is_started = True
 
     def join(self, **kwargs) -> None:
         if self.is_shutdown:
@@ -65,6 +72,7 @@ class GenericDuckiematrixSubscriberComponent(IComponent[None, OutputType]):
 
     def stop(self):
         self._is_shutdown = True
+        self._is_started = False
         try:
             self._sensor.detach(self._callback)
         except:
@@ -72,6 +80,18 @@ class GenericDuckiematrixSubscriberComponent(IComponent[None, OutputType]):
         # release all Threads that have joined this object
         with self._join:
             self._join.notify_all()
+
+    @property
+    def queues(self) -> Iterator[IQueue]:
+        # return all queues
+        for attr_name in set(self.__dict__.keys()) - set(dir(self.__class__)):
+            attr = getattr(self, attr_name)
+            if isinstance(attr, IQueue):
+                yield attr
+
+    def reset(self):
+        self._is_started = False
+        self._is_shutdown = False
 
 
 class GenericDuckiematrixPublisherComponent(IComponent[InputType, None]):
@@ -83,6 +103,7 @@ class GenericDuckiematrixPublisherComponent(IComponent[InputType, None]):
         assert "DUCKIEMATRIX_ENGINE_HOST" in os.environ
         self._engine_hostname = os.environ["DUCKIEMATRIX_ENGINE_HOST"]
         # ---
+        self._is_started: bool = False
         self._matrix = Duckiematrix.get_instance(self._engine_hostname)
         self._robot: DB21M = self._matrix.robots.DB21M(self._vehicle_name)
         # simulate Thread.join
@@ -91,7 +112,12 @@ class GenericDuckiematrixPublisherComponent(IComponent[InputType, None]):
         self._in_data: IQueue[Any] = CallbackQueue(self.publish)
 
     def start(self) -> None:
-        pass
+        self.reset()
+        self._is_started = True
+
+    @property
+    def is_started(self) -> bool:
+        return self._is_started
 
     def join(self, **kwargs) -> None:
         if self.is_shutdown:
@@ -108,9 +134,22 @@ class GenericDuckiematrixPublisherComponent(IComponent[InputType, None]):
 
     def stop(self):
         self._is_shutdown = True
+        self._is_started = False
         # release all Threads that have joined this object
         with self._join:
             self._join.notify_all()
+
+    @property
+    def queues(self) -> List[IQueue]:
+        # return all queues
+        for attr_name in set(self.__dict__.keys()) - set(dir(self.__class__)):
+            attr = getattr(self, attr_name)
+            if isinstance(attr, IQueue):
+                yield attr
+
+    def reset(self):
+        self._is_started = False
+        self._is_shutdown = False
 
 
 class DuckiematrixCameraDriverComponent(GenericDuckiematrixSubscriberComponent[BGRImage]):
