@@ -1,6 +1,6 @@
 import os
 from abc import ABC
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, Iterator
 
 from .base import OutputType, InputType, IComponent
 from .duckiematrix import \

@@ -2,7 +2,7 @@ import os
 import time
 from abc import abstractmethod
 from threading import Condition
-from typing import Optional, Any, Tuple, List, Callable
+from typing import Optional, Any, Tuple, List, Callable, Iterator
 
 # noinspection PyUnresolvedReferences
 from turbojpeg import TurboJPEG
