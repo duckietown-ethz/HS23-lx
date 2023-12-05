@@ -21,6 +21,7 @@ CameraParameters = Dict[str, Union[np.ndarray, int]]
 
 
 T = TypeVar("T")
+R = TypeVar("R")
 SHUTDOWN_DUMMY = object()
 
 
@@ -145,6 +146,25 @@ class CallbackQueue(IQueue[T]):
                 self._callback(value)
             else:
                 q.put(value)
+
+    def reset(self):
+        self._is_shutdown = False
+
+
+class LambdaQueue(IQueue[T], Generic[T, R]):
+
+    def __init__(self, target: IQueue, get: Callable[[T], R] = None, put: Callable[[T], R] = None):
+        super(LambdaQueue, self).__init__()
+        passthrough: Callable[[T], R] = lambda x: x
+        self._get_wrapper: Callable[[T], None] = get or passthrough
+        self._put_wrapper: Callable[[T], None] = put or passthrough
+        self._target: IQueue = target
+
+    def get(self) -> T:
+        return self._get_wrapper(self._target.get())
+
+    def put(self, value: T):
+        self._target.put(self._put_wrapper(value))
 
     def reset(self):
         self._is_shutdown = False
