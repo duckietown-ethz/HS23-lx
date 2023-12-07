@@ -19,7 +19,9 @@ __all__ = [
     "ROSTimeOfFlightDriverComponent",
     "ROSWheelEncoderDriverComponent",
     "ROSMotorsDriverComponent",
-    "ROSLEDsDriverComponent"
+    "ROSLEDsDriverComponent",
+    "GenericROSPublisherComponent",
+    "GenericROSSubscriberComponent"
 ]
 
 
