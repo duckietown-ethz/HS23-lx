@@ -4,3 +4,4 @@ from .lane_following import *
 from .odometry import *
 from .rendering import *
 from .utilities import *
+from .telemetry import *
