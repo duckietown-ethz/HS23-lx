@@ -4,13 +4,13 @@ from abc import abstractmethod
 from threading import Condition
 from typing import Optional, Any, Tuple, List
 
-import roslibpy
+from roslibpy import Message
 
 # noinspection PyUnresolvedReferences
 from turbojpeg import TurboJPEG
 
 from .base import Component, OutputType, InputType
-from ..ros import ROS
+from ..ros import ROS, RosTopic
 from ..types import JPEGImage, BGRImage, IQueue, Queue, CallbackQueue, PWMSignal, LEDsPattern, RGBAColor, \
     Range, Ticks
 
@@ -27,13 +27,31 @@ __all__ = [
 
 class GenericROSSubscriberComponent(Component[None, OutputType]):
 
-    def __init__(self, vehicle_name: str, topic_name: str, msg_type: str, throttle_rate: int = 0):
+    def __init__(self, vehicle_name: str, topic_name: str, msg_type: str,
+                 compression=None,
+                 latch: bool = False,
+                 frequency: float = 0,
+                 queue_size: int = 1,
+                 queue_length: int = 1,
+                 reconnect_on_close: bool = True):
         super(GenericROSSubscriberComponent, self).__init__()
         self._vehicle_name: str = vehicle_name
         self._ros = ROS.get_connection(self._vehicle_name)
         topic_name: str = f"/{self._vehicle_name}/{topic_name.lstrip('/')}"
-        self._topic: roslibpy.Topic = roslibpy.Topic(self._ros, topic_name, msg_type,
-                                                     throttle_rate=throttle_rate)
+        # convert frequency to throttle rate (ms between messages)
+        throttle_rate: int = int(1000 * (1.0 / frequency)) if frequency > 0 else 0
+        # create underlying topic
+        self._topic: RosTopic = RosTopic(
+            self._ros,
+            topic_name,
+            msg_type,
+            compression=compression,
+            latch=latch,
+            throttle_rate=throttle_rate,
+            queue_size=queue_size,
+            queue_length=queue_length,
+            reconnect_on_close=reconnect_on_close
+        )
         # queues
         self._out_data: IQueue[Any] = Queue()
         self._sleep: IQueue[None] = Queue()
@@ -66,7 +84,9 @@ class GenericROSPublisherComponent(Component[InputType, None]):
         self._vehicle_name: str = vehicle_name
         self._ros = ROS.get_connection(self._vehicle_name)
         topic_name: str = f"/{self._vehicle_name}/{topic_name.lstrip('/')}"
-        self._topic: roslibpy.Topic = roslibpy.Topic(self._ros, topic_name, msg_type)
+        self._topic: RosTopic = RosTopic(self._ros, topic_name, msg_type)
+        # data override
+        self._override_msg: Optional[dict] = None
         # simulate Thread.join
         self._join: Condition = Condition()
         # queues
@@ -78,6 +98,9 @@ class GenericROSPublisherComponent(Component[InputType, None]):
         pass
 
     def start(self) -> None:
+        # let the parent class start
+        super(GenericROSPublisherComponent, self).start()
+        # connect to ROS
         if not self._ros.is_connected:
             self._ros.run()
 
@@ -91,12 +114,21 @@ class GenericROSPublisherComponent(Component[InputType, None]):
         pass
 
     def _publish(self, data: Any, *, force: bool = False):
+        if not self.is_started and not force:
+            return
         if self.is_shutdown and not force:
             return
+        # (re)advertise the topic if necessary
+        if not self._topic.is_advertised and not self.is_shutdown:
+            self._topic.advertise()
         # format message
-        msg: dict = self._data_to_msg(data)
+        msg: dict = self._data_to_msg(data) if not self._override_msg else self._override_msg
         # publish message
-        self._topic.publish(roslibpy.Message(msg))
+        self._topic.publish(Message(msg))
+
+    def reset(self):
+        super().reset()
+        self._override_msg = None
 
     def stop(self):
         # let the parent class start the cleaning process (important that we do this first)
@@ -113,10 +145,10 @@ class GenericROSPublisherComponent(Component[InputType, None]):
 
 class ROSCameraDriverComponent(GenericROSSubscriberComponent[BGRImage]):
     def __init__(self, vehicle_name: str, **kwargs):
-        # TODO: you might want to expose the throttle to avoid swamping the websocket
         super(ROSCameraDriverComponent, self).__init__(
             vehicle_name, "/camera_node/image/compressed", "sensor_msgs/CompressedImage", **kwargs
         )
+        self._compression: Optional[str] = kwargs.get("compression", None)
         # JPEG decoder
         self._jpeg_decoder = TurboJPEG()
 
@@ -125,8 +157,14 @@ class ROSCameraDriverComponent(GenericROSSubscriberComponent[BGRImage]):
         return self._out_data
 
     def _msg_to_data(self, msg) -> BGRImage:
-        raw: bytes = msg['data'].encode('ascii')
-        jpeg: JPEGImage = base64.b64decode(raw)
+        if self._topic.compression == "cbor":
+            jpeg: JPEGImage = msg['data']
+        elif self._topic.compression == "none":
+            raw: bytes = msg['data'].encode('ascii')
+            jpeg: JPEGImage = base64.b64decode(raw)
+        else:
+            raise ValueError(f"Compression '{self._compression}' not supported")
+        # ---
         return self._jpeg_decoder.decode(jpeg)
 
 
@@ -236,5 +274,10 @@ class ROSMotorsDriverComponent(GenericROSPublisherComponent[Tuple[PWMSignal, PWM
         self.out_command_time.put(time.time())
 
     def stop(self):
+        self._override_msg = self._data_to_msg((self.OFF, self.OFF))
+        # send the 0, 0 command multiple times
+        for _ in range(5):
+            self._publish((self.OFF, self.OFF), force=True)
+            time.sleep(1. / 60.)
+        # ---
         super(ROSMotorsDriverComponent, self).stop()
-        self._publish((self.OFF, self.OFF), force=True)

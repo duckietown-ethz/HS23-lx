@@ -20,6 +20,7 @@ class IComponent(Generic[InputType, OutputType], ABC):
 
     def __init__(self):
         self._is_shutdown: bool = False
+        self._is_started: bool = False
 
     @property
     def id(self) -> str:
@@ -30,9 +31,8 @@ class IComponent(Generic[InputType, OutputType], ABC):
         return self._is_shutdown
 
     @property
-    @abstractmethod
     def is_started(self) -> bool:
-        pass
+        return self._is_started
 
     @abstractmethod
     def start(self):
@@ -69,16 +69,13 @@ class Component(IComponent[InputType, OutputType], ABC):
         super(Component, self).__init__()
         self._thread: Optional[Thread] = None
 
-    @property
-    def is_started(self) -> bool:
-        return self._thread is not None
-
     def start(self):
         if self.is_started:
             raise RuntimeError("You cannot start a Component twice.")
         self.reset()
         self._thread = Thread(target=self.run)
         self._thread.start()
+        self._is_started = True
 
     def join(self):
         if self.is_started:
@@ -89,11 +86,13 @@ class Component(IComponent[InputType, OutputType], ABC):
         # stop all queues
         for queue in self.queues:
             queue.stop()
+        self._is_started = False
 
     def reset(self):
         if self.is_started:
             raise RuntimeError("You must shutdown a component before you can reset it")
         self._is_shutdown = False
+        self._is_started = False
         self._thread = None
         for queue in self.queues:
             queue.reset()

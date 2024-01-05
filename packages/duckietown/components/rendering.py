@@ -5,6 +5,8 @@ import cv2
 from IPython.core.display import DisplayObject
 from IPython.display import display, Image, Markdown
 
+from dt_class_utils import DTReminder
+
 from .base import Component, InputType
 from ..types import JPEGImage, BGRImage, Queue
 
@@ -30,8 +32,12 @@ class GenericRenderingComponent(Component[InputType, None], ABC):
 
 class ImageRendererComponent(GenericRenderingComponent[Union[JPEGImage, BGRImage]]):
 
-    def __init__(self, disp: Optional[display] = None):
-        super(ImageRendererComponent, self).__init__(Image(data=b""), disp)
+    def __init__(self, disp: Optional[display] = None, frequency: float = None, image_opts: dict = None):
+        self._image_opts: dict = image_opts or {}
+        self._image: Image = Image(data=b"", **self._image_opts)
+        super(ImageRendererComponent, self).__init__(self._image, disp)
+        self._frequency: float = frequency or 0
+        self._reminder: DTReminder = DTReminder(frequency=self._frequency)
         # queues
         self.in_image: Queue[Union[JPEGImage, BGRImage]] = Queue()
 
@@ -40,17 +46,21 @@ class ImageRendererComponent(GenericRenderingComponent[Union[JPEGImage, BGRImage
         while not self.is_shutdown:
             frame: Union[JPEGImage, BGRImage] = self.in_image.get()
             jpeg: JPEGImage
-            # JPEG
-            if isinstance(frame, JPEGImage):
-                jpeg = frame
-            # BGR
-            else:
-                # bgr -> jpeg
-                _, frame = cv2.imencode('.jpeg', frame)
-                jpeg = frame.tobytes()
 
-            # render frame
-            self._display.update(Image(data=jpeg))
+            if self._reminder.is_time():
+                # JPEG
+                if isinstance(frame, JPEGImage):
+                    jpeg = frame
+                # BGR
+                else:
+                    # bgr -> jpeg
+                    _, frame = cv2.imencode('.jpeg', frame)
+                    jpeg = frame.tobytes()
+
+                # render frame
+                # self._display.update(Image(data=jpeg, **self._image_opts, retina=True))
+                self._image.data = jpeg
+                self._display.update(self._image)
 
 
 class TextRendererComponent(GenericRenderingComponent[str]):

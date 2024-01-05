@@ -29,6 +29,7 @@ class IQueue(Generic[T], ABC):
 
     def __init__(self):
         self._links: Set[IQueue] = {self}
+        self._connected_to: Set[IQueue] = set()
         self._is_shutdown: bool = False
 
     @abstractmethod
@@ -49,9 +50,27 @@ class IQueue(Generic[T], ABC):
 
     def forward_to(self, q: 'IQueue'):
         self._links.add(q)
+        self._connected_to.add(q)
 
     def wants(self, q: 'IQueue'):
         q._links.add(self)
+        self._connected_to.add(q)
+
+    def detach(self, q: 'IQueue'):
+        # try to unlink queues
+        try:
+            q._links.remove(self)
+        except KeyError:
+            pass
+        # try to remove knowledge of this connection
+        try:
+            self._connected_to.remove(q)
+        except KeyError:
+            pass
+
+    def detach_all(self):
+        for q in list(self._connected_to):
+            self.detach(q)
 
     def stop(self):
         self._is_shutdown = True

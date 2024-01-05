@@ -24,10 +24,38 @@ OmegaLeft, OmegaRight = float, float
 PWMLeft, PWMRight = float, float
 
 # colors
+# DEFAULT_COLOR_RANGES: Dict[str, ColorRange] = {
+#     "white": ColorRange.fromDict({"low": [10, 0, 120], "high": [220, 100, 220]}),
+#     "yellow": ColorRange.fromDict({"low": [0, 100, 100], "high": [40, 255, 220]}),
+#     # "red": ColorRange.fromDict({
+#     #     "low_1": [0, 140, 100],
+#     #     "high_1": [15, 255, 255],
+#     #     "low_2": [165, 140, 100],
+#     #     "high_2": [180, 255, 255],
+#     # }),
+# }
+
+
 DEFAULT_COLOR_RANGES: Dict[str, ColorRange] = {
-    "white": ColorRange.fromDict({"low": [0, 0, 150], "high": [180, 100, 255]}),
-    "yellow": ColorRange.fromDict({"low": [0, 100, 100], "high": [45, 255, 255]}),
+    "white": ColorRange.fromDict({"low": [0, 0, 180], "high": [220, 220, 220]}),
+    "yellow": ColorRange.fromDict({"low": [0, 40, 100], "high": [40, 255, 255]}),
+    "red": ColorRange.fromDict({
+        "low": [165, 140, 100],
+        "high": [180, 255, 255],
+    }),
 }
+
+
+
+
+# GOOD ranges - Belmont Media Center - Demo
+DEFAULT_COLOR_RANGES: Dict[str, ColorRange] = {
+    "white": ColorRange.fromDict({"low": [0, 0, 180], "high": [220, 220, 220]}),
+    "yellow": ColorRange.fromDict({"low": [0, 40, 100], "high": [40, 255, 255]}),
+}
+
+
+
 COLORS: Dict[str, RGB8Color] = {
     "red": (0, 0, 255),
     "yellow": (0, 255, 255),
@@ -68,58 +96,58 @@ class ImageCropComponent(Component[BGRImage, BGRImage]):
     DEFAULT_CAMERA_PARAMETERS: CameraParameters = {
         "width": 640,
         "height": 480,
-        "K": np.reshape(
-            [
-                295.79606866959824,
-                0.0,
-                321.2621599038631,
-                0.0,
-                299.5389048862878,
-                241.73616515312332,
-                0.0,
-                0.0,
-                1.0,
-            ],
-            (3, 3),
-        ),
-        "D": [
-            -0.23543978771661125,
-            0.03637781479419574,
-            -0.0033069818601306755,
-            -0.0012140708179525926,
-            0.0,
-        ],
-        "P": np.reshape(
-            [
-                201.14027404785156,
-                0.0,
-                319.5586620845679,
-                0.0,
-                0.0,
-                239.74398803710938,
-                237.60151004037834,
-                0.0,
-                0.0,
-                0.0,
-                1.0,
-                0.0,
-            ],
-            (3, 4),
-        ),
-        "H": np.reshape(
-            [
-                8.56148231e-03,
-                2.22480148e-01,
-                4.24318934e-01,
-                -5.67022044e-01,
-                -1.13258040e-03,
-                6.81113839e-04,
-                5.80917161e-02,
-                4.35079347e00,
-                1.0,
-            ],
-            (3, 3),
-        ),
+        # "K": np.reshape(
+        #     [
+        #         295.79606866959824,
+        #         0.0,
+        #         321.2621599038631,
+        #         0.0,
+        #         299.5389048862878,
+        #         241.73616515312332,
+        #         0.0,
+        #         0.0,
+        #         1.0,
+        #     ],
+        #     (3, 3),
+        # ),
+        # "D": [
+        #     -0.23543978771661125,
+        #     0.03637781479419574,
+        #     -0.0033069818601306755,
+        #     -0.0012140708179525926,
+        #     0.0,
+        # ],
+        # "P": np.reshape(
+        #     [
+        #         201.14027404785156,
+        #         0.0,
+        #         319.5586620845679,
+        #         0.0,
+        #         0.0,
+        #         239.74398803710938,
+        #         237.60151004037834,
+        #         0.0,
+        #         0.0,
+        #         0.0,
+        #         1.0,
+        #         0.0,
+        #     ],
+        #     (3, 4),
+        # ),
+        # "H": np.reshape(
+        #     [
+        #         8.56148231e-03,
+        #         2.22480148e-01,
+        #         4.24318934e-01,
+        #         -5.67022044e-01,
+        #         -1.13258040e-03,
+        #         6.81113839e-04,
+        #         5.80917161e-02,
+        #         4.35079347e00,
+        #         1.0,
+        #     ],
+        #     (3, 3),
+        # ),
     }
 
     def __init__(self, parameters: CameraParameters, crop_top: int = 240):
@@ -200,12 +228,13 @@ class LineDetectorComponent(Component[BGRImage, Dict[ColorName, DetectedLines]])
         super(LineDetectorComponent, self).__init__()
         self._color_ranges: Dict[str, ColorRange] = color_ranges or DEFAULT_COLOR_RANGES
         # create line detector
-        self._color_order = ["yellow", "white"]
+        self._color_order = ["white", "yellow"]# , "red"]
         self._colors_to_detect = [self._color_ranges[c] for c in self._color_order]
         self._detector: LineDetector = LineDetector(**kwargs)
         # queues
         self.in_bgr: Queue[BGRImage] = Queue()
         self.out_lines: Queue[Dict[ColorName, DetectedLines]] = Queue()
+        # debug queues
         self.out_lines_image: Queue[BGRImage] = Queue()
 
     def worker(self):
@@ -225,8 +254,11 @@ class LineDetectorComponent(Component[BGRImage, Dict[ColorName, DetectedLines]])
             self.out_lines.put(lines)
 
             # draw detections on top of the image
-            # TODO: rendering only "yellow" here is arbitrary
-            image_w_dets = draw_segments(bgr, {self._color_ranges["yellow"]: color_detections[0]})
+            segments_to_render: Dict[ColorRange, Detections] = {
+                self._color_ranges[c]: color_detections[self._color_order.index(c)]
+                for c in self._color_order
+            }
+            image_w_dets = draw_segments(bgr, segments_to_render)
             self.out_lines_image.put(image_w_dets)
 
 
@@ -289,13 +321,14 @@ class LaneFilterComponent(Component[Dict[ColorName, DetectedLines], Tuple[D, Phi
         )
         self._projector: GroundProjector = GroundProjector(self._camera)
         # create filter
-        self._filter: LaneFilterHistogram = LaneFilterHistogram(**kwargs)
+        self._filter: LaneFilterHistogram = LaneFilterHistogram(**kwargs, linewidth_yellow=0.05)
         self._grid: BGRImage = draw_grid_image((400, 400))
         # queues
         self.in_lines: Queue[Dict[ColorName, DetectedLines]] = Queue()
         self.in_v_omega: Queue[Tuple[V, Omega]] = Queue(repeat_last=True)
         self.in_command_time: Queue[float] = Queue(repeat_last=True, initial=0.0)
         self.out_d_phi: Queue[Tuple[D, Phi]] = Queue()
+        self.out_segments: Queue[List[Segment]] = Queue()
         self.out_segments_image: Queue[BGRImage] = Queue()
         self.out_belief_image: Queue[BGRImage] = Queue()
 
@@ -327,6 +360,9 @@ class LaneFilterComponent(Component[Dict[ColorName, DetectedLines], Tuple[D, Phi
 
                 # add segments to list of segments for this color
                 colored_segments[COLORS[color]] = grounded_segments
+
+            # publish ground segments
+            self.out_segments.put(segments)
 
             # draw segments
             if self.out_segments_image.anybody_interested:
@@ -415,7 +451,7 @@ class InverseKinematicsComponent(Component[Tuple[V, Omega], Tuple[OmegaLeft, Ome
 
     """
 
-    def __init__(self, v_max: float = 1.0, omega_max: float = 0.8):
+    def __init__(self, v_max: float = 1.0, omega_max: float = 5.0):
         super(InverseKinematicsComponent, self).__init__()
         # create IK mapper
         self._ik = InverseKinematics(
